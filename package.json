@@ -1,0 +1,7 @@
+{
+  "name": "influr-engine",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node src/index.mjs" },
+  "dependencies": { "@supabase/supabase-js": "^2.112.2" }
+}

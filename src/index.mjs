@@ -139,9 +139,23 @@ async function sendEvolutionText(connection, phone, text) {
 async function processInbound(job) {
   const { data: conversation, error: conversationError } = await supabase
     .from("agent_conversations")
-    .select("id,organization_id,agent_id,contact_phone,inbox_id")
+    .select("id,organization_id,agent_id,contact_phone,inbox_id,status,metadata")
     .eq("id", job.conversation_id).eq("organization_id", job.organization_id).single();
   if (conversationError || !conversation?.contact_phone) throw new Error("A conversa precisa de um telefone para responder.");
+
+  const humanPauseUntil = conversation.metadata?.human_pause_until;
+  if (humanPauseUntil && new Date(humanPauseUntil) > new Date()) {
+    // Um integrante respondeu pelo painel. O agente respeita a tomada de
+    // atendimento por uma hora e volta a ficar disponível depois disso.
+    return;
+  }
+  if (humanPauseUntil) {
+    await supabase
+      .from("agent_conversations")
+      .update({ status: "open", metadata: { ...(conversation.metadata || {}), human_pause_until: null } })
+      .eq("id", conversation.id)
+      .eq("organization_id", job.organization_id);
+  }
 
   const agentRequest = conversation.agent_id
     ? supabase.from("ai_agents").select("id,enabled,role,description,instructions,personality,tone_of_voice,allowed_actions,paused_until,max_replies_per_conversation,handoff_keywords").eq("id", conversation.agent_id).eq("organization_id", job.organization_id).single()

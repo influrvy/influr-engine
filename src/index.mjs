@@ -148,7 +148,7 @@ async function processInbound(job) {
     : Promise.resolve({ data: null, error: null });
   const [{ data: loadedAgent, error: agentError }, { data: connection, error: connectionError }, { data: messages, error: messagesError }] = await Promise.all([
     agentRequest,
-    supabase.from("agent_inboxes").select("whatsapp_connections(external_reference,provider,status,agent_id)").eq("id", conversation.inbox_id).eq("organization_id", job.organization_id).single(),
+    supabase.from("agent_inboxes").select("whatsapp_connections(id,external_reference,provider,status,agent_id)").eq("id", conversation.inbox_id).eq("organization_id", job.organization_id).single(),
     supabase.from("agent_messages").select("direction,body,created_at").eq("conversation_id", conversation.id).eq("organization_id", job.organization_id).order("created_at", { ascending: false }).limit(12),
   ]);
   const whatsapp = connection?.whatsapp_connections;
@@ -169,6 +169,9 @@ async function processInbound(job) {
         .update({ agent_id: currentAgent.id })
         .eq("id", conversation.id)
         .eq("organization_id", job.organization_id);
+      if (whatsapp.id && whatsapp.agent_id !== currentAgent.id) {
+        await supabase.from("whatsapp_connections").update({ agent_id: currentAgent.id }).eq("id", whatsapp.id).eq("organization_id", job.organization_id);
+      }
     }
   }
   // Protege atendimentos que ficaram com um ID removido após apagar e criar
@@ -189,6 +192,9 @@ async function processInbound(job) {
         .update({ agent_id: recoveredAgent.id })
         .eq("id", conversation.id)
         .eq("organization_id", job.organization_id);
+      if (whatsapp?.id && whatsapp.agent_id !== recoveredAgent.id) {
+        await supabase.from("whatsapp_connections").update({ agent_id: recoveredAgent.id }).eq("id", whatsapp.id).eq("organization_id", job.organization_id);
+      }
     }
   }
   if (!agent?.enabled) throw new Error("O agente vinculado está indisponível.");

@@ -151,7 +151,10 @@ async function processInbound(job) {
     supabase.from("agent_inboxes").select("whatsapp_connections(id,external_reference,provider,status,agent_id)").eq("id", conversation.inbox_id).eq("organization_id", job.organization_id).single(),
     supabase.from("agent_messages").select("direction,body,created_at").eq("conversation_id", conversation.id).eq("organization_id", job.organization_id).order("created_at", { ascending: false }).limit(12),
   ]);
-  const whatsapp = connection?.whatsapp_connections;
+  const rawWhatsapp = connection?.whatsapp_connections;
+  // O PostgREST pode devolver relações aninhadas como objeto ou lista,
+  // conforme a versão da relação. O engine aceita os dois formatos.
+  const whatsapp = Array.isArray(rawWhatsapp) ? rawWhatsapp[0] : rawWhatsapp;
   let agent = loadedAgent;
   // A conversa pode existir desde antes de o usuário trocar o agente do número.
   // Nesse caso, o número conectado é a fonte de verdade para os próximos atendimentos.

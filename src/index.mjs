@@ -145,6 +145,26 @@ async function processInbound(job) {
         .eq("organization_id", job.organization_id);
     }
   }
+  // Protege atendimentos que ficaram com um ID removido após apagar e criar
+  // novamente um agente. Só faz a recuperação se havia um vínculo anterior.
+  if (!agent?.enabled && (conversation.agent_id || whatsapp?.agent_id)) {
+    const { data: recoveredAgent } = await supabase
+      .from("ai_agents")
+      .select("id,enabled,role,description,instructions,personality,tone_of_voice,allowed_actions,paused_until,max_replies_per_conversation,handoff_keywords")
+      .eq("organization_id", job.organization_id)
+      .eq("enabled", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recoveredAgent) {
+      agent = recoveredAgent;
+      await supabase
+        .from("agent_conversations")
+        .update({ agent_id: recoveredAgent.id })
+        .eq("id", conversation.id)
+        .eq("organization_id", job.organization_id);
+    }
+  }
   if (!agent?.enabled) throw new Error("O agente vinculado está indisponível.");
   if (agent.paused_until && new Date(agent.paused_until) > new Date()) return;
   if (connectionError || !whatsapp?.external_reference || whatsapp.provider !== "evolution" || whatsapp.status !== "connected") throw new Error("O número WhatsApp não está conectado à Evolution.");

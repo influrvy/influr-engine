@@ -64,6 +64,32 @@ async function markJob(job, status, error = null) {
   await supabase.from("engine_jobs").update(payload).eq("id", job.id).eq("organization_id", job.organization_id);
 }
 
+async function retryOrFail(job, error) {
+  const message = error instanceof Error ? error.message : "Falha inesperada do engine.";
+  const attempts = Number(job.attempts || 0);
+  if (attempts < 3) {
+    const delayMs = attempts === 1 ? 10_000 : 30_000;
+    await supabase.from("engine_jobs").update({
+      status: "queued",
+      locked_at: null,
+      completed_at: null,
+      error_message: message,
+      scheduled_for: new Date(Date.now() + delayMs).toISOString(),
+    }).eq("id", job.id).eq("organization_id", job.organization_id);
+    console.warn(`Job ${job.id} will retry after ${delayMs / 1000}s: ${message}`);
+    return;
+  }
+  await markJob(job, "failed", message);
+}
+
+async function recoverStaleJobs() {
+  // Uma reinicialização do container não pode deixar atendimentos presos em
+  // "processing". Após cinco minutos, a fila os devolve com segurança.
+  await supabase.from("engine_jobs").update({ status: "queued", locked_at: null })
+    .eq("status", "processing")
+    .lt("locked_at", new Date(Date.now() - 5 * 60 * 1000).toISOString());
+}
+
 async function answerWithGemini({ agent, messages, context }) {
   const transcript = messages.map((message) => `${message.direction === "incoming" ? "Cliente" : "Assistente"}: ${clean(message.body)}`).join("\n");
   const instructions = [
@@ -195,7 +221,7 @@ async function processInbound(job) {
 }
 
 async function work() {
-  await supabase.rpc("expire_influr_trials");
+  await Promise.all([supabase.rpc("expire_influr_trials"), recoverStaleJobs()]);
   const { data: jobs, error } = await supabase.rpc("claim_engine_jobs", { p_limit: 5 });
   if (error) throw new Error(`Não foi possível consultar a fila: ${error.message}`);
   for (const job of jobs || []) {
@@ -203,7 +229,7 @@ async function work() {
       if (job.job_type === "inbound_message") await processInbound(job);
       await markJob(job, "completed");
     } catch (error) {
-      await markJob(job, "failed", error instanceof Error ? error.message : "Falha inesperada do engine.");
+      await retryOrFail(job, error);
     }
   }
 }

@@ -115,16 +115,38 @@ async function processInbound(job) {
     .from("agent_conversations")
     .select("id,organization_id,agent_id,contact_phone,inbox_id")
     .eq("id", job.conversation_id).eq("organization_id", job.organization_id).single();
-  if (conversationError || !conversation?.agent_id || !conversation.contact_phone) throw new Error("A conversa precisa de um agente e telefone para responder.");
+  if (conversationError || !conversation?.contact_phone) throw new Error("A conversa precisa de um telefone para responder.");
 
-  const [{ data: agent, error: agentError }, { data: connection, error: connectionError }, { data: messages, error: messagesError }] = await Promise.all([
-    supabase.from("ai_agents").select("id,enabled,role,description,instructions,personality,tone_of_voice,allowed_actions,paused_until,max_replies_per_conversation,handoff_keywords").eq("id", conversation.agent_id).eq("organization_id", job.organization_id).single(),
-    supabase.from("agent_inboxes").select("whatsapp_connections(external_reference,provider,status)").eq("id", conversation.inbox_id).eq("organization_id", job.organization_id).single(),
+  const agentRequest = conversation.agent_id
+    ? supabase.from("ai_agents").select("id,enabled,role,description,instructions,personality,tone_of_voice,allowed_actions,paused_until,max_replies_per_conversation,handoff_keywords").eq("id", conversation.agent_id).eq("organization_id", job.organization_id).single()
+    : Promise.resolve({ data: null, error: null });
+  const [{ data: loadedAgent, error: agentError }, { data: connection, error: connectionError }, { data: messages, error: messagesError }] = await Promise.all([
+    agentRequest,
+    supabase.from("agent_inboxes").select("whatsapp_connections(external_reference,provider,status,agent_id)").eq("id", conversation.inbox_id).eq("organization_id", job.organization_id).single(),
     supabase.from("agent_messages").select("direction,body,created_at").eq("conversation_id", conversation.id).eq("organization_id", job.organization_id).order("created_at", { ascending: false }).limit(12),
   ]);
-  if (agentError || !agent?.enabled) throw new Error("O agente vinculado está indisponível.");
-  if (agent.paused_until && new Date(agent.paused_until) > new Date()) return;
   const whatsapp = connection?.whatsapp_connections;
+  let agent = loadedAgent;
+  // A conversa pode existir desde antes de o usuário trocar o agente do número.
+  // Nesse caso, o número conectado é a fonte de verdade para os próximos atendimentos.
+  if ((agentError || !agent?.enabled) && whatsapp?.agent_id) {
+    const { data: currentAgent } = await supabase
+      .from("ai_agents")
+      .select("id,enabled,role,description,instructions,personality,tone_of_voice,allowed_actions,paused_until,max_replies_per_conversation,handoff_keywords")
+      .eq("id", whatsapp.agent_id)
+      .eq("organization_id", job.organization_id)
+      .maybeSingle();
+    if (currentAgent?.enabled) {
+      agent = currentAgent;
+      await supabase
+        .from("agent_conversations")
+        .update({ agent_id: currentAgent.id })
+        .eq("id", conversation.id)
+        .eq("organization_id", job.organization_id);
+    }
+  }
+  if (!agent?.enabled) throw new Error("O agente vinculado está indisponível.");
+  if (agent.paused_until && new Date(agent.paused_until) > new Date()) return;
   if (connectionError || !whatsapp?.external_reference || whatsapp.provider !== "evolution" || whatsapp.status !== "connected") throw new Error("O número WhatsApp não está conectado à Evolution.");
   if (messagesError || !messages?.length) throw new Error("Não há mensagem para processar.");
   const latestCustomerMessage = [...messages].find((message) => message.direction === "incoming")?.body || "";

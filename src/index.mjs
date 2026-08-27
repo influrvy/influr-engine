@@ -7,7 +7,11 @@ for (const name of required) if (!process.env[name]) throw new Error(`Missing re
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
-const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const requestedModel = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+// Gemini 2.5 Flash is no longer available to newly-created API projects.
+// Preserve existing EasyPanel configurations while moving the Engine to the
+// current low-cost Flash model without requiring an environment edit.
+const model = requestedModel === "gemini-2.5-flash" ? "gemini-3.5-flash-lite" : requestedModel;
 const intervalMs = Math.max(2000, Number(process.env.ENGINE_POLL_INTERVAL_MS || 5000));
 
 function clean(text) {

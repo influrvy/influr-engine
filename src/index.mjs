@@ -33,7 +33,7 @@ async function loadAgentContext(organizationId, agent) {
     canReadCatalog ? supabase.from("products").select("name,description,price_from_amount,price_to_amount,sale_amount").eq("organization_id", organizationId).eq("active", true).limit(80) : Promise.resolve({ data: [] }),
     canReadCatalog ? supabase.from("services").select("name,description,duration_minutes,price_from_amount,price_to_amount,price_amount").eq("organization_id", organizationId).eq("active", true).limit(80) : Promise.resolve({ data: [] }),
     canReadCatalog ? supabase.from("menu_items").select("name,description,price_amount,available,menu_categories(name)").eq("organization_id", organizationId).eq("available", true).limit(120) : Promise.resolve({ data: [] }),
-    supabase.from("agent_knowledge_sources").select("name,source_type,external_url,status").eq("organization_id", organizationId).eq("status", "ready").limit(30),
+    supabase.from("agent_knowledge_sources").select("name,source_type,external_url,storage_path,status").eq("organization_id", organizationId).eq("status", "ready").limit(30),
     canReadAgenda ? supabase.from("appointments").select("starts_at,ends_at,title,status").eq("organization_id", organizationId).in("status", ["scheduled", "confirmed"]).gte("starts_at", new Date().toISOString()).order("starts_at", { ascending: true }).limit(80) : Promise.resolve({ data: [] }),
   ]);
   const products = productsResult.data || [];
@@ -48,7 +48,15 @@ async function loadAgentContext(organizationId, agent) {
   ];
   const agenda = appointments.map((item) => `${new Date(item.starts_at).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}–${new Date(item.ends_at).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}: ocupado (${item.title})`).join("\n");
   const knowledge = sources.map((item) => `${item.name} (${item.source_type})${item.external_url ? `: ${item.external_url}` : ""}`).join("\n");
-  return { catalog: catalog.join("\n") || "Nenhum item cadastrado.", agenda: agenda || "Nenhum horário futuro ocupado cadastrado.", knowledge: knowledge || "Nenhuma fonte adicional cadastrada." };
+  const pdfParts = [];
+  for (const source of sources.filter((item) => item.source_type === "pdf" && item.storage_path).slice(0, 2)) {
+    const { data: file, error } = await supabase.storage.from("agent-knowledge").download(source.storage_path);
+    if (!error && file && file.size <= 3 * 1024 * 1024) {
+      const encoded = Buffer.from(await file.arrayBuffer()).toString("base64");
+      pdfParts.push({ inlineData: { mimeType: "application/pdf", data: encoded } });
+    }
+  }
+  return { catalog: catalog.join("\n") || "Nenhum item cadastrado.", agenda: agenda || "Nenhum horário futuro ocupado cadastrado.", knowledge: knowledge || "Nenhuma fonte adicional cadastrada.", pdfParts };
 }
 
 async function markJob(job, status, error = null) {
@@ -80,7 +88,7 @@ async function answerWithGemini({ agent, messages, context }) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: instructions }] },
-      contents: [{ role: "user", parts: [{ text: `Conversa atual:\n${transcript}\n\nResponda somente à última mensagem do cliente.` }] }],
+      contents: [{ role: "user", parts: [{ text: `Conversa atual:\n${transcript}\n\nResponda somente à última mensagem do cliente. PDFs autorizados, quando existirem, estão anexados a esta conversa.` }, ...context.pdfParts] }],
       generationConfig: { temperature: 0.2, maxOutputTokens: 140 },
     }),
   });

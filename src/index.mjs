@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { createServer } from "node:http";
 
 const required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "GEMINI_API_KEY", "EVOLUTION_API_URL", "EVOLUTION_API_KEY"];
 for (const name of required) if (!process.env[name]) throw new Error(`Missing required environment variable: ${name}`);
@@ -103,5 +104,18 @@ async function tick() {
 }
 
 console.log(`Influr Engine started with ${model}.`);
+// EasyPanel supervises App services through an HTTP port. The Engine is a
+// worker, but this small health endpoint keeps the worker observable without
+// exposing any data or operational controls.
+const port = Number(process.env.PORT || 3000);
+createServer((request, response) => {
+  if (request.url === "/health") {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ status: "ok", service: "influr-engine" }));
+    return;
+  }
+  response.writeHead(404, { "content-type": "application/json" });
+  response.end(JSON.stringify({ error: "Not found" }));
+}).listen(port, "0.0.0.0", () => console.log(`Influr Engine health endpoint listening on ${port}.`));
 await tick();
 setInterval(tick, intervalMs);
